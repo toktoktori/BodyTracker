@@ -15,11 +15,14 @@ st.title("🔥 Power-Building Slope Tracker : Google Sheets Edition")
 def get_google_sheet():
     try:
         # Streamlit Secrets에서 키 가져오기
-        # .to_dict()를 사용하여 확실하게 딕셔너리로 변환
         key_dict = dict(st.secrets["gcp_service_account"])
         
-        # 구글 인증 범위 설정
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        # [수정됨] 구글 인증 범위 설정 (드라이브 권한 추가!)
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        
         creds = Credentials.from_service_account_info(key_dict, scopes=scopes)
         client = gspread.authorize(creds)
         
@@ -28,9 +31,6 @@ def get_google_sheet():
         return sheet
     except Exception as e:
         st.error(f"🚨 연결 에러 발생: {str(e)}")
-        # 디버깅용 힌트 (보안상 키 전체 노출 금지)
-        if "private_key" in str(e):
-             st.error("힌트: Private Key 형식이 잘못되었습니다.")
         return None
 
 # 시트 연결 시도
@@ -46,7 +46,7 @@ def load_data():
             return pd.DataFrame(columns=['Date', 'Weight', 'SMM'])
         return pd.DataFrame(data)
     except Exception as e:
-        st.error(f"데이터 읽기 에러: {e}")
+        # 데이터가 아직 없거나 읽기 에러 시 빈 데이터프레임 반환
         return pd.DataFrame(columns=['Date', 'Weight', 'SMM'])
 
 # 초기 데이터 로드
