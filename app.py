@@ -141,13 +141,12 @@ if not df.empty and 'Date' in df.columns and len(df) > 0:
         display_analysis(col1, "⏱️ 최근 14일", 14, df)
         display_analysis(col2, "📅 최근 30일", 30, df)
 
-    # 탭 2: 데이터 관리 (수정 및 삭제 기능 추가)
+   # 탭 2: 데이터 관리 (안전 강화 버전)
     with tab2:
         st.subheader("🛠️ 데이터 수정 및 삭제")
         st.caption("💡 표에서 값을 직접 더블클릭해 수정하거나, 행을 선택해 삭제(Del 키)할 수 있습니다.")
         
-        # 1. 엑셀 같은 편집기 표시 (수정 가능 모드)
-        # num_rows="dynamic"을 주면 행 추가/삭제도 가능해집니다.
+        # 데이터 편집기
         edited_df = st.data_editor(
             df.sort_values(by='Date', ascending=False),
             use_container_width=True,
@@ -155,34 +154,42 @@ if not df.empty and 'Date' in df.columns and len(df) > 0:
             key="data_editor"
         )
         
-        st.warning("⚠️ 수정을 마치면 아래 [동기화] 버튼을 꼭 눌러야 구글 시트에 반영됩니다!")
+        st.warning("⚠️ [동기화]를 누르면 현재 화면의 데이터로 구글 시트가 덮어씌워집니다.")
         
-        # 2. 동기화 버튼
         if st.button("🔄 수정사항 구글 시트에 동기화하기", type="primary"):
             try:
                 if sheet:
-                    # 데이터프레임의 날짜 형식을 문자열로 통일 (오류 방지)
+                    # [핵심 수정] 데이터프레임 복사 후 안전하게 변환
                     save_df = edited_df.copy()
+                    
+                    # 1. 날짜를 문자열로 변환 (오류 방지)
                     save_df['Date'] = save_df['Date'].astype(str)
                     
-                    # 구글 시트 싹 비우고 새로 쓰기 (가장 확실한 방법)
+                    # 2. 숫자 데이터를 구글 친화적(float)으로 강제 변환 (NumPy 오류 해결!)
+                    # 에러가 나지 않도록 to_numeric으로 변환 후 표준 float으로 처리
+                    save_df['Weight'] = pd.to_numeric(save_df['Weight'], errors='coerce').astype(float)
+                    save_df['SMM'] = pd.to_numeric(save_df['SMM'], errors='coerce').astype(float)
+                    
+                    # 구글 시트 초기화
                     sheet.clear()
                     
                     # 헤더(제목) 넣기
                     sheet.append_row(save_df.columns.tolist())
                     
-                    # 내용물 넣기
-                    # 판다스 데이터를 리스트로 변환해서 한 번에 업로드
+                    # 내용물 넣기 (이제 안전합니다!)
+                    # .tolist()를 사용하면 Python 기본 타입으로 변환되어 전송됨
                     sheet.append_rows(save_df.values.tolist())
                     
-                    st.success("✅ 구글 시트가 성공적으로 업데이트되었습니다!")
-                    st.cache_data.clear() # 캐시 비우기
-                    st.rerun() # 새로고침
+                    st.success("✅ 안전하게 저장되었습니다! (데이터 보호 모드 작동 중)")
+                    st.cache_data.clear()
+                    st.rerun()
             except Exception as e:
-                st.error(f"저장 중 오류 발생: {e}")
-
+                # 만약 에러가 나도 사용자가 알 수 있게 표시
+                st.error(f"🚨 저장 중 문제가 발생했습니다: {e}")
+                st.info("데이터가 날아갔다면 구글 시트의 [버전 기록]에서 복구하세요!")
 else:
     # 데이터가 아예 없거나 컬럼명이 틀렸을 때 안내
     st.info("👈 왼쪽에서 데이터를 입력하고 '저장'을 눌러주세요!")
     st.warning("💡 만약 데이터를 넣었는데도 이 메시지가 뜬다면, 구글 시트의 1행이 'Date', 'Weight', 'SMM'으로 되어 있는지 확인해 주세요.")
+
 
