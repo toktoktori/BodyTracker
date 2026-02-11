@@ -2,5 +2,3 @@ streamlit
 pandas
 scipy
 plotly
-gspread
-oauth2client
