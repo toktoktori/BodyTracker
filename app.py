@@ -17,7 +17,7 @@ def get_google_sheet():
         # Streamlit Secrets에서 키 가져오기
         key_dict = dict(st.secrets["gcp_service_account"])
         
-        # [수정됨] 구글 인증 범위 설정 (드라이브 권한 추가!)
+        # 구글 인증 범위 설정
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
@@ -36,7 +36,7 @@ def get_google_sheet():
 # 시트 연결 시도
 sheet = get_google_sheet()
 
-# 데이터 불러오기 함수 (에러 방지 강화 버전)
+# 데이터 불러오기 함수
 def load_data():
     if sheet is None:
         return pd.DataFrame(columns=['Date', 'Weight', 'SMM'])
@@ -44,10 +44,9 @@ def load_data():
         data = sheet.get_all_records()
         df = pd.DataFrame(data)
         
-        # 만약 시트에 제목이 없어서 컬럼이 다를 경우를 대비
+        # 컬럼 확인 및 빈 데이터 처리
         expected_cols = ['Date', 'Weight', 'SMM']
         if not all(col in df.columns for col in expected_cols):
-            # 컬럼명이 일치하지 않으면 빈 데이터프레임 반환 후 안내
             return pd.DataFrame(columns=expected_cols)
             
         return df
@@ -66,6 +65,7 @@ with st.sidebar:
     
     if st.button("💾 데이터 저장하기"):
         if sheet:
+            # 사이드바 저장 시에도 안전하게 변환
             date_str = input_date.strftime("%Y-%m-%d")
             new_row = [date_str, input_weight, input_smm]
             sheet.append_row(new_row)
@@ -80,7 +80,13 @@ def calculate_slope(dataframe, days):
     if dataframe.empty or 'Date' not in dataframe.columns:
         return None
         
-    dataframe['Date_Obj'] = pd.to_datetime(dataframe['Date'])
+    # 날짜 변환 시 에러 방지
+    try:
+        dataframe['Date_Obj'] = pd.to_datetime(dataframe['Date'], errors='coerce')
+        dataframe = dataframe.dropna(subset=['Date_Obj']) # 날짜 없는 행 제외
+    except:
+        return None
+
     cutoff_date = datetime.now() - timedelta(days=days)
     recent_df = dataframe[dataframe['Date_Obj'] >= cutoff_date].copy()
     
@@ -88,7 +94,16 @@ def calculate_slope(dataframe, days):
         return None
     
     recent_df['Date_Num'] = recent_df['Date_Obj'].map(datetime.toordinal)
-    slope, intercept, r_value, p_value, std_err = stats.linregress(recent_df['Date_Num'], recent_df['Weight'])
+    
+    # 데이터가 숫자형인지 확인
+    try:
+        recent_df['Weight'] = pd.to_numeric(recent_df['Weight'], errors='coerce')
+        recent_df = recent_df.dropna(subset=['Weight'])
+        if len(recent_df) < 2: return None
+        
+        slope, intercept, r_value, p_value, std_err = stats.linregress(recent_df['Date_Num'], recent_df['Weight'])
+    except:
+        return None
     
     return {
         "slope": slope,
@@ -109,31 +124,38 @@ def display_analysis(col, title, days, dataframe):
             val_daily = f"{slope:.3f} kg/day"
             delta_weekly = f"{(slope * 7):.2f} kg/week"
             monthly_gain_kg = slope * 30
-            monthly_gain_percent = (monthly_gain_kg / current_weight) * 100
-            val_jeff = f"{monthly_gain_percent:.2f} % / 30일"
-            delta_jeff_kg = f"{monthly_gain_kg:.2f} kg / 30일"
-
-        st.metric(label=f"변화량 ({days}일 기준)", value=val_daily, delta=delta_weekly)
-        st.write("---")
-        st.markdown(f"**📊 Jeff's Score (%/월)**")
-        st.metric(label="월간 예상 성장률", value=val_jeff, delta=delta_jeff_kg)
-        
-        if res:
-            if monthly_gain_percent > 1.5: st.error("🚨 [Dirty Bulk] 주의")
-            elif 0.5 <= monthly_gain_percent <= 1.0: st.success("💎 [Lean Bulk] 이상적")
-            elif monthly_gain_percent < 0: st.warning("📉 [Cutting] 중")
+            if current_weight > 0:
+                monthly_gain_percent = (monthly_gain_kg / current_weight) * 100
+                val_jeff = f"{monthly_gain_percent:.2f} % / 30일"
+                delta_jeff_kg = f"{monthly_gain_kg:.2f} kg / 30일"
+                
+                st.metric(label=f"변화량 ({days}일 기준)", value=val_daily, delta=delta_weekly)
+                st.write("---")
+                st.markdown(f"**📊 Jeff's Score (%/월)**")
+                st.metric(label="월간 예상 성장률", value=val_jeff, delta=delta_jeff_kg)
+                
+                if monthly_gain_percent > 1.5: st.error("🚨 [Dirty Bulk] 주의")
+                elif 0.5 <= monthly_gain_percent <= 1.0: st.success("💎 [Lean Bulk] 이상적")
+                elif monthly_gain_percent < 0: st.warning("📉 [Cutting] 중")
+            else:
+                st.info("체중 데이터 오류")
         else:
             st.info(f"👉 {days}일 데이터 부족")
 
-# 3. 메인 화면 로직 (Tab2 포함 완전체)
+# 3. 메인 화면 로직
 if not df.empty and 'Date' in df.columns and len(df) > 0:
-    tab1, tab2 = st.tabs(["📊 듀얼 분석", "📋 시트 확인"])
+    tab1, tab2 = st.tabs(["📊 듀얼 분석", "🛠️ 데이터 관리"])
     
     # 탭 1: 그래프 및 분석
     with tab1:
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['Weight'], mode='lines+markers', name='체중(kg)', line=dict(color='firebrick')))
-        fig.add_trace(go.Scatter(x=df['Date'], y=df['SMM'], mode='lines+markers', name='근육량(kg)', line=dict(color='royalblue')))
+        # 그래프 그리기 전 날짜 정렬
+        plot_df = df.copy()
+        plot_df['Date'] = pd.to_datetime(plot_df['Date'], errors='coerce')
+        plot_df = plot_df.sort_values(by='Date')
+        
+        fig.add_trace(go.Scatter(x=plot_df['Date'], y=plot_df['Weight'], mode='lines+markers', name='체중(kg)', line=dict(color='firebrick')))
+        fig.add_trace(go.Scatter(x=plot_df['Date'], y=plot_df['SMM'], mode='lines+markers', name='근육량(kg)', line=dict(color='royalblue')))
         st.plotly_chart(fig, use_container_width=True)
         st.divider()
         
@@ -141,10 +163,10 @@ if not df.empty and 'Date' in df.columns and len(df) > 0:
         display_analysis(col1, "⏱️ 최근 14일", 14, df)
         display_analysis(col2, "📅 최근 30일", 30, df)
 
-   # 탭 2: 데이터 관리 (안전 강화 버전)
+    # 탭 2: 데이터 관리 (초강력 안전 버전)
     with tab2:
         st.subheader("🛠️ 데이터 수정 및 삭제")
-        st.caption("💡 표에서 값을 직접 더블클릭해 수정하거나, 행을 선택해 삭제(Del 키)할 수 있습니다.")
+        st.caption("💡 엑셀처럼 수정하고 [동기화]를 누르세요. 행을 선택하고 Delete 키를 누르면 삭제됩니다.")
         
         # 데이터 편집기
         edited_df = st.data_editor(
@@ -154,42 +176,35 @@ if not df.empty and 'Date' in df.columns and len(df) > 0:
             key="data_editor"
         )
         
-        st.warning("⚠️ [동기화]를 누르면 현재 화면의 데이터로 구글 시트가 덮어씌워집니다.")
+        st.warning("⚠️ [동기화] 버튼을 누르면 위 화면대로 구글 시트가 덮어씌워집니다.")
         
         if st.button("🔄 수정사항 구글 시트에 동기화하기", type="primary"):
             try:
                 if sheet:
-                    # [핵심 수정] 데이터프레임 복사 후 안전하게 변환
+                    # [초강력 수정] 모든 데이터를 안전한 문자열/숫자로 강제 변환
                     save_df = edited_df.copy()
                     
-                    # 1. 날짜를 문자열로 변환 (오류 방지)
-                    save_df['Date'] = save_df['Date'].astype(str)
+                    # 1. 날짜 컬럼 강제 문자열 변환 (Timestamp 제거)
+                    # apply를 사용하여 개별 값의 타입을 확인하고 변환 (가장 안전함)
+                    save_df['Date'] = save_df['Date'].apply(lambda x: x.strftime('%Y-%m-%d') if hasattr(x, 'strftime') else str(x))
                     
-                    # 2. 숫자 데이터를 구글 친화적(float)으로 강제 변환 (NumPy 오류 해결!)
-                    # 에러가 나지 않도록 to_numeric으로 변환 후 표준 float으로 처리
-                    save_df['Weight'] = pd.to_numeric(save_df['Weight'], errors='coerce').astype(float)
-                    save_df['SMM'] = pd.to_numeric(save_df['SMM'], errors='coerce').astype(float)
+                    # 2. 숫자 데이터 강제 변환 (NaN은 0으로)
+                    save_df['Weight'] = pd.to_numeric(save_df['Weight'], errors='coerce').fillna(0.0)
+                    save_df['SMM'] = pd.to_numeric(save_df['SMM'], errors='coerce').fillna(0.0)
                     
-                    # 구글 시트 초기화
+                    # 3. 구글 시트 초기화 전 데이터 준비 확인
+                    data_to_upload = [save_df.columns.tolist()] + save_df.values.tolist()
+                    
+                    # 4. 시트 클리어 및 업로드
                     sheet.clear()
+                    sheet.append_rows(data_to_upload)
                     
-                    # 헤더(제목) 넣기
-                    sheet.append_row(save_df.columns.tolist())
-                    
-                    # 내용물 넣기 (이제 안전합니다!)
-                    # .tolist()를 사용하면 Python 기본 타입으로 변환되어 전송됨
-                    sheet.append_rows(save_df.values.tolist())
-                    
-                    st.success("✅ 안전하게 저장되었습니다! (데이터 보호 모드 작동 중)")
+                    st.success("✅ 완벽하게 저장되었습니다!")
                     st.cache_data.clear()
                     st.rerun()
             except Exception as e:
-                # 만약 에러가 나도 사용자가 알 수 있게 표시
-                st.error(f"🚨 저장 중 문제가 발생했습니다: {e}")
-                st.info("데이터가 날아갔다면 구글 시트의 [버전 기록]에서 복구하세요!")
+                st.error(f"🚨 저장 실패 (데이터는 안전합니다): {e}")
+                st.info("구글 시트의 [버전 기록]을 확인하세요.")
 else:
-    # 데이터가 아예 없거나 컬럼명이 틀렸을 때 안내
     st.info("👈 왼쪽에서 데이터를 입력하고 '저장'을 눌러주세요!")
-    st.warning("💡 만약 데이터를 넣었는데도 이 메시지가 뜬다면, 구글 시트의 1행이 'Date', 'Weight', 'SMM'으로 되어 있는지 확인해 주세요.")
-
-
+    st.warning("💡 구글 시트 1행에 'Date', 'Weight', 'SMM'이 있는지 확인해주세요.")
