@@ -36,17 +36,22 @@ def get_google_sheet():
 # 시트 연결 시도
 sheet = get_google_sheet()
 
-# 데이터 불러오기 함수
+# 데이터 불러오기 함수 (에러 방지 강화 버전)
 def load_data():
     if sheet is None:
         return pd.DataFrame(columns=['Date', 'Weight', 'SMM'])
     try:
         data = sheet.get_all_records()
-        if not data:
-            return pd.DataFrame(columns=['Date', 'Weight', 'SMM'])
-        return pd.DataFrame(data)
+        df = pd.DataFrame(data)
+        
+        # 만약 시트에 제목이 없어서 컬럼이 다를 경우를 대비
+        expected_cols = ['Date', 'Weight', 'SMM']
+        if not all(col in df.columns for col in expected_cols):
+            # 컬럼명이 일치하지 않으면 빈 데이터프레임 반환 후 안내
+            return pd.DataFrame(columns=expected_cols)
+            
+        return df
     except Exception as e:
-        # 데이터가 아직 없거나 읽기 에러 시 빈 데이터프레임 반환
         return pd.DataFrame(columns=['Date', 'Weight', 'SMM'])
 
 # 초기 데이터 로드
@@ -120,26 +125,35 @@ def display_analysis(col, title, days, dataframe):
         else:
             st.info(f"👉 {days}일 데이터 부족")
 
-# 3. 메인 화면
-if not df.empty:
+# 3. 메인 화면 로직 (Tab2 포함 완전체)
+if not df.empty and 'Date' in df.columns and len(df) > 0:
     tab1, tab2 = st.tabs(["📊 듀얼 분석", "📋 시트 확인"])
+    
+    # 탭 1: 그래프 및 분석
     with tab1:
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=df['Date'], y=df['Weight'], mode='lines+markers', name='체중(kg)', line=dict(color='firebrick')))
         fig.add_trace(go.Scatter(x=df['Date'], y=df['SMM'], mode='lines+markers', name='근육량(kg)', line=dict(color='royalblue')))
         st.plotly_chart(fig, use_container_width=True)
         st.divider()
+        
         col1, col2 = st.columns(2)
         display_analysis(col1, "⏱️ 최근 14일", 14, df)
         display_analysis(col2, "📅 최근 30일", 30, df)
+
+    # 탭 2: 원본 데이터 확인 (이 부분이 추가됨!)
     with tab2:
         st.subheader("📋 구글 시트 실시간 데이터")
+        st.info("💡 수정/삭제는 구글 시트 웹사이트에서 직접 하시면 안전합니다.")
+        st.link_button("👉 구글 시트로 이동하기", "https://docs.google.com/spreadsheets/")
+        # 날짜 내림차순 정렬해서 보여주기
         st.dataframe(df.sort_values(by='Date', ascending=False), use_container_width=True)
-        if st.button("🔄 새로고침"):
+        
+        if st.button("🔄 데이터 새로고침"):
             st.cache_data.clear()
             st.rerun()
+
 else:
-    if sheet:
-        st.info("👈 데이터를 입력해주세요! (구글 시트에 저장됩니다)")
-    else:
-        st.error("서버 연결에 실패했습니다. Secrets 설정을 확인해주세요.")
+    # 데이터가 아예 없거나 컬럼명이 틀렸을 때 안내
+    st.info("👈 왼쪽에서 데이터를 입력하고 '저장'을 눌러주세요!")
+    st.warning("💡 만약 데이터를 넣었는데도 이 메시지가 뜬다면, 구글 시트의 1행이 'Date', 'Weight', 'SMM'으로 되어 있는지 확인해 주세요.")
