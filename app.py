@@ -3,29 +3,44 @@ import pandas as pd
 import plotly.graph_objects as go
 from scipy import stats
 from datetime import datetime, timedelta
-import os
+from github import Github # GitHub 연동 라이브러리
+import io
 
 # 1. 페이지 설정
 st.set_page_config(page_title="V-Taper Tracker", layout="wide")
-st.title("🔥 Power-Building Slope Tracker : Simple CSV Edition")
+st.title("🔥 Power-Building Slope Tracker : GitHub Auto-Save Edition")
 
-# --- [핵심] CSV 파일 관리 함수 ---
-CSV_FILE = 'data.csv'
+# --- [핵심] GitHub 연동 함수 ---
+def get_github_repo():
+    token = st.secrets["github"]["token"]
+    repo_name = st.secrets["github"]["repo_name"]
+    g = Github(token)
+    return g.get_repo(repo_name)
 
-def load_data():
-    if not os.path.exists(CSV_FILE):
-        return pd.DataFrame(columns=['Date', 'Weight', 'SMM'])
+def load_data_from_github():
     try:
-        df = pd.read_csv(CSV_FILE)
-        return df
+        repo = get_github_repo()
+        # data.csv 파일 내용을 가져옴
+        contents = repo.get_contents("data.csv")
+        return pd.read_csv(io.StringIO(contents.decoded_content.decode()))
     except:
+        # 파일이 없으면 빈 데이터프레임 생성
         return pd.DataFrame(columns=['Date', 'Weight', 'SMM'])
 
-def save_data(df):
-    df.to_csv(CSV_FILE, index=False)
+def save_to_github(df):
+    repo = get_github_repo()
+    csv_content = df.to_csv(index=False)
+    
+    try:
+        # 기존 파일이 있으면 업데이트 (Update)
+        contents = repo.get_contents("data.csv")
+        repo.update_file("data.csv", "Updated data from Streamlit", csv_content, contents.sha)
+    except:
+        # 파일이 없으면 새로 생성 (Create)
+        repo.create_file("data.csv", "Created data.csv", csv_content)
 
-# 초기 데이터 로드
-df = load_data()
+# 초기 데이터 로드 (이제 GitHub에서 직접 가져옵니다!)
+df = load_data_from_github()
 
 # 2. 사이드바: 데이터 입력
 with st.sidebar:
@@ -34,18 +49,21 @@ with st.sidebar:
     input_weight = st.number_input("체중 (kg)", min_value=0.0, step=0.1, format="%.1f")
     input_smm = st.number_input("골격근량 (kg)", min_value=0.0, step=0.1, format="%.1f")
     
-    if st.button("💾 데이터 저장하기"):
-        date_str = input_date.strftime("%Y-%m-%d")
-        new_row = pd.DataFrame({'Date': [date_str], 'Weight': [input_weight], 'SMM': [input_smm]})
-        
-        # 날짜 중복 체크 (덮어쓰기 로직)
-        if not df.empty and date_str in df['Date'].values:
-            df = df[df['Date'] != date_str]
-        
-        df = pd.concat([df, new_row], ignore_index=True)
-        save_data(df)
-        
-        st.success("✅ 저장 완료!")
+    if st.button("💾 데이터 영구 저장하기"):
+        with st.spinner('GitHub에 안전하게 저장 중...'):
+            date_str = input_date.strftime("%Y-%m-%d")
+            new_row = pd.DataFrame({'Date': [date_str], 'Weight': [input_weight], 'SMM': [input_smm]})
+            
+            # 중복 날짜 처리 (덮어쓰기)
+            if not df.empty and date_str in df['Date'].values:
+                df = df[df['Date'] != date_str]
+            
+            df = pd.concat([df, new_row], ignore_index=True)
+            
+            # GitHub에 저장!
+            save_to_github(df)
+            
+        st.success("✅ GitHub에 영구 저장 완료! (앱이 꺼져도 안전합니다)")
         st.cache_data.clear()
         st.rerun()
 
@@ -101,7 +119,6 @@ if not df.empty:
     tab1, tab2 = st.tabs(["📊 듀얼 분석", "🛠️ 데이터 관리"])
     
     with tab1:
-        # 날짜순 정렬 후 그래프 그리기
         plot_df = df.sort_values(by='Date')
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=plot_df['Date'], y=plot_df['Weight'], mode='lines+markers', name='체중(kg)', line=dict(color='firebrick')))
@@ -114,7 +131,6 @@ if not df.empty:
 
     with tab2:
         st.subheader("🛠️ 데이터 수정 및 삭제")
-        # 엑셀처럼 편집 가능한 데이터프레임
         edited_df = st.data_editor(
             df.sort_values(by='Date', ascending=False),
             use_container_width=True,
@@ -122,10 +138,11 @@ if not df.empty:
             key="csv_editor"
         )
         
-        if st.button("💾 수정사항 저장하기", type="primary"):
-            save_data(edited_df)
-            st.success("✅ CSV 파일에 저장되었습니다!")
+        if st.button("💾 수정사항 영구 저장하기", type="primary"):
+            with st.spinner('GitHub에 업데이트 중...'):
+                save_to_github(edited_df)
+            st.success("✅ GitHub 파일이 업데이트되었습니다!")
             st.cache_data.clear()
             st.rerun()
 else:
-    st.info("👈 왼쪽에서 데이터를 입력해주세요!")
+    st.info("👈 데이터를 입력하면 GitHub에 영구 저장됩니다!")
